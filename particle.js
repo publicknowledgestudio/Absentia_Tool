@@ -19,8 +19,9 @@ class Particle {
   }
   
   seek() {
-    let nx = (this.px * 2 / width - 1) * settings.scale;
-    let ny = (this.py * 2 / height - 1) * settings.scale;
+    let baseSize = Math.max(width, height);
+    let nx = ((this.px - width/2) * 2 / baseSize) * settings.scale;
+    let ny = ((this.py - height/2) * 2 / baseSize) * settings.scale;
     
     let val;
     if (settings.mode === 'Chladni') {
@@ -36,9 +37,7 @@ class Particle {
     let tx = this.px;
     let ty = this.py;
     
-    let nxNorm = this.px * 2 / width - 1;
-    let nyNorm = this.py * 2 / height - 1;
-    let rSqNorm = nxNorm*nxNorm + nyNorm*nyNorm;
+    let rSqNorm = ((this.px - width/2) * 2 / baseSize)**2 + ((this.py - height/2) * 2 / baseSize)**2;
     let falloff = Math.exp(-rSqNorm * settings.taper * 2);
     
     // By allowing threshold to expand slightly outward, we allow particles to catch outer nodes 
@@ -102,6 +101,19 @@ class Particle {
     
     this.ax = 0;
     this.ay = 0;
+    
+    // Optical Tapering: 
+    let baseSize = Math.max(width, height);
+    let rSqNorm = ((this.px - width/2) * 2 / baseSize)**2 + ((this.py - height/2) * 2 / baseSize)**2;
+    
+    let jitter = settings.taper * rSqNorm * 10;
+    if (jitter > 0) {
+      this.drawX = this.px + random(-jitter, jitter);
+      this.drawY = this.py + random(-jitter, jitter);
+    } else {
+      this.drawX = this.px;
+      this.drawY = this.py;
+    }
   }
 
   static scatterAll(particlesArray) {

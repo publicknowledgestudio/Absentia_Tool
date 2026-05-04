@@ -32,6 +32,7 @@ let settings = {
   mode: 'Geometric',
   geomShape: 0,
   morphSpeed: 0.015,
+  aspectRatio: '1:1 (Square)',
   
   numParticles: 8000, 
   m: 5,
@@ -89,6 +90,7 @@ function setup() {
   currentM = settings.m;
   currentN = settings.n;
   
+  windowResized(); // Set initial aspect ratio
   randomPatterns();
   lastChangeTime = millis();
 }
@@ -133,6 +135,7 @@ function setupGUI() {
   renderFolder.add(settings, 'shapeOpacity', 0, 255, 5).name('Shape Opacity');
   renderFolder.add(settings, 'shapeBlur', 0, 50, 1).name('Shape Blur');
   renderFolder.add(settings, 'layerBlur', 0, 20, 1).name('Particle Blur');
+  renderFolder.add(settings, 'aspectRatio', ['1:1 (Square)', '16:9 (Landscape)', '9:16 (Portrait)', '4:3', '3:4']).name('Aspect Ratio').onChange(windowResized);
   
   renderFolder.add(settings, 'bgStyle', ['Solid', 'Radial Gradient']).name('BG Style');
   let bgDict = {};
@@ -155,8 +158,12 @@ function setupGUI() {
 function toggleRecording() {
   if (!isRecording) {
     recordedChunks = [];
-    let stream = document.querySelector('canvas').captureStream(30);
-    let options = { mimeType: 'video/webm' };
+    let stream = document.querySelector('canvas').captureStream(60); // 60 FPS
+    
+    let options = { mimeType: 'video/webm; codecs=vp9', videoBitsPerSecond: 25000000 }; // 25 Mbps HQ
+    if (!MediaRecorder.isTypeSupported('video/webm; codecs=vp9')) {
+      options.mimeType = 'video/webm';
+    }
     
     try {
       mediaRecorder = new MediaRecorder(stream, options);
@@ -209,11 +216,12 @@ function drawShapeLayer() {
   shapeLayer.noStroke();
   
   let pCol = color(settings.particleCol);
+  let baseSize = Math.max(width, height);
   
   for (let y = 0; y < height; y += shapeStep) {
     for (let x = 0; x < width; x += shapeStep) {
-      let nx = (x * 2 / width - 1) * settings.scale;
-      let ny = (y * 2 / height - 1) * settings.scale;
+      let nx = ((x - width/2) * 2 / baseSize) * settings.scale;
+      let ny = ((y - height/2) * 2 / baseSize) * settings.scale;
       
       let val;
       if (settings.mode === 'Chladni') {
@@ -230,12 +238,10 @@ function drawShapeLayer() {
       if (absVal < settings.threshold * 3) {
         let nodeIntensity = map(absVal, 0, settings.threshold * 3, 1, 0);
         
-        let nxNorm = x * 2 / width - 1;
-        let nyNorm = y * 2 / height - 1;
-        let rSq = nxNorm*nxNorm + nyNorm*nyNorm;
+        let rSqNorm = ((x - width/2) * 2 / baseSize)**2 + ((y - height/2) * 2 / baseSize)**2;
         
         // Intensity falloff taper matching the physics engine
-        let falloff = Math.exp(-rSq * settings.taper * 2);
+        let falloff = Math.exp(-rSqNorm * settings.taper * 2);
         
         let finalAlpha = nodeIntensity * falloff * settings.shapeOpacity;
         if (finalAlpha > 1) {
@@ -313,7 +319,7 @@ function draw() {
     
     for (let i = 0; i < particles.length; i++) {
       particles[i].update();
-      particleLayer.point(particles[i].px, particles[i].py);
+      particleLayer.point(particles[i].drawX, particles[i].drawY);
     }
     
     drawingContext.filter = `blur(${settings.layerBlur}px)`;
@@ -325,7 +331,7 @@ function draw() {
     
     for (let i = 0; i < particles.length; i++) {
       particles[i].update();
-      point(particles[i].px, particles[i].py);
+      point(particles[i].drawX, particles[i].drawY);
     }
   }
 }
@@ -385,12 +391,36 @@ function randomPatterns() {
 }
 
 function windowResized() {
-  let size = min(windowWidth, windowHeight);
-  resizeCanvas(size, size);
-  particleLayer.resizeCanvas(size, size);
-  particleLayer.pixelDensity(pixelDensity());
-  shapeLayer.resizeCanvas(size, size);
-  shapeLayer.pixelDensity(pixelDensity());
+  let aspectOptions = {
+    '1:1 (Square)': 1,
+    '16:9 (Landscape)': 16/9,
+    '9:16 (Portrait)': 9/16,
+    '4:3': 4/3,
+    '3:4': 3/4
+  };
+  let targetRatio = aspectOptions[settings.aspectRatio] || 1;
+  let w = windowWidth;
+  let h = windowHeight;
+  let currentRatio = w / h;
+  
+  let newW, newH;
+  if (currentRatio > targetRatio) {
+    newH = h * 0.95;
+    newW = newH * targetRatio;
+  } else {
+    newW = w * 0.95;
+    newH = newW / targetRatio;
+  }
+  
+  resizeCanvas(newW, newH);
+  if (particleLayer) {
+    particleLayer.resizeCanvas(newW, newH);
+    particleLayer.pixelDensity(pixelDensity());
+  }
+  if (shapeLayer) {
+    shapeLayer.resizeCanvas(newW, newH);
+    shapeLayer.pixelDensity(pixelDensity());
+  }
   generateNoise();
 }
 
