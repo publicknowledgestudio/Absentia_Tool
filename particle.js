@@ -1,59 +1,116 @@
 class Particle {
   constructor() {
-    this.position = createVector(random(width), random(height));
-    this.velocity = p5.Vector.random2D();
-    this.acceleration = createVector();
+    this.px = random(width);
+    this.py = random(height);
+    let angle = random(TWO_PI);
+    let speed = random(1, 2);
+    this.vx = Math.cos(angle) * speed;
+    this.vy = Math.sin(angle) * speed;
+    this.ax = 0;
+    this.ay = 0;
   }
   
   edges() {
-    if (this.position.x > width) {
-      this.position.x = 0;
-    } else if (this.position.x < 0) {
-      this.position.x = width;
-    }
+    if (this.px > width) this.px = 0;
+    else if (this.px < 0) this.px = width;
     
-    if (this.position.y > height) {
-      this.position.y = 0;
-    } else if (this.position.y < 0) {
-      this.position.y = height;
-    }
+    if (this.py > height) this.py = 0;
+    else if (this.py < 0) this.py = height;
   }
   
   seek() {
-    // Map position to a normalized space and apply scale
-    let x = map(this.position.x, 0, width, -1, 1) * settings.scale;
-    let y = map(this.position.y, 0, height, -1, 1) * settings.scale;
-    let val = chladni(x, y); 
+    let nx = (this.px * 2 / width - 1) * settings.scale;
+    let ny = (this.py * 2 / height - 1) * settings.scale;
     
-    let target = this.position.copy();
-
-    if (abs(val) > settings.threshold) {
-      target.x += random(-3, 3);
-      target.y += random(-3, 3);
-    } 
+    let val;
+    if (settings.mode === 'Chladni') {
+      let v1 = chladniField(nx, ny, currentM, currentN);
+      let v2 = chladniField(nx, ny, targetM, targetN);
+      val = v1 + (v2 - v1) * geomMorph;
+    } else {
+      let v1 = evalGeom(nx, ny, currentGeom);
+      let v2 = evalGeom(nx, ny, targetGeom);
+      val = v1 + (v2 - v1) * geomMorph;
+    }
     
-    let desired = p5.Vector.sub(target, this.position);
-    desired.setMag(settings.particleSpeed);
-    let steering = p5.Vector.sub(desired, this.velocity);
-    steering.limit(settings.particleForce);
+    let tx = this.px;
+    let ty = this.py;
     
-    return steering;
+    let nxNorm = this.px * 2 / width - 1;
+    let nyNorm = this.py * 2 / height - 1;
+    let rSqNorm = nxNorm*nxNorm + nyNorm*nyNorm;
+    let falloff = Math.exp(-rSqNorm * settings.taper * 2);
+    
+    // By allowing threshold to expand slightly outward, we allow particles to catch outer nodes 
+    // more easily, increasing peripheral presence and preventing center-locking.
+    let currentThreshold = settings.threshold * (1 + (1 - falloff) * 2); 
+    
+    let absVal = Math.abs(val);
+    
+    if (absVal > currentThreshold) {
+      // Wandering randomly to find a node. Unbiased distribution.
+      let wander = 1 + settings.taper * 5 * rSqNorm;
+      tx += random(-3 * wander, 3 * wander);
+      ty += random(-3 * wander, 3 * wander);
+    } else {
+      // Settled on a node. 
+      // Add a baseline jitter to prevent permanent clamping and allow flow, creating a soft volumetric feel.
+      let blur = settings.taper * 2 * rSqNorm + 0.2;
+      tx += random(-blur, blur);
+      ty += random(-blur, blur);
+    }
+    
+    let dx = tx - this.px;
+    let dy = ty - this.py;
+    
+    // Safely cap desired velocity. This allows particles to natively slow down 
+    // when they lock onto a node instead of violently jittering at max speed.
+    let dMag = Math.sqrt(dx*dx + dy*dy);
+    if (dMag > settings.particleSpeed) {
+      dx = (dx / dMag) * settings.particleSpeed;
+      dy = (dy / dMag) * settings.particleSpeed;
+    }
+    
+    let sx = dx - this.vx;
+    let sy = dy - this.vy;
+    
+    let sMag = Math.sqrt(sx*sx + sy*sy);
+    if (sMag > settings.particleForce) {
+      sx = (sx / sMag) * settings.particleForce;
+      sy = (sy / sMag) * settings.particleForce;
+    }
+    
+    this.ax += sx;
+    this.ay += sy;
   }
   
   update() {
     this.edges();
+    this.seek();
     
-    this.acceleration.add(this.seek());
-    this.velocity.add(this.acceleration);
-    this.velocity.limit(settings.particleSpeed);
-    this.position.add(this.velocity);
-    this.acceleration.mult(0);
+    this.vx += this.ax;
+    this.vy += this.ay;
+    
+    let vMag = Math.sqrt(this.vx*this.vx + this.vy*this.vy);
+    if (vMag > settings.particleSpeed) {
+      this.vx = (this.vx / vMag) * settings.particleSpeed;
+      this.vy = (this.vy / vMag) * settings.particleSpeed;
+    }
+    
+    this.px += this.vx;
+    this.py += this.vy;
+    
+    this.ax = 0;
+    this.ay = 0;
   }
 
-  // Iterates through all particles to randomise their velocity, causing them to move and reorganize
   static scatterAll(particlesArray) {
     for (let i = 0; i < particlesArray.length; i++) {
-      particlesArray[i].velocity = p5.Vector.random2D().mult(random(2, 5));
+      let p = particlesArray[i];
+      let angle = random(TWO_PI);
+      let mag = random(2, 5);
+      p.vx = Math.cos(angle) * mag;
+      p.vy = Math.sin(angle) * mag;
     }
   }
 }

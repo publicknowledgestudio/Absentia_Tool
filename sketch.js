@@ -4,6 +4,9 @@ const bgPalette = ['#A5A19C', '#404246', '#6E7B8A', '#878787', '#E1E4D5', '#F6F6
 let particles = [];
 let lastChangeTime = 0;
 let particleLayer;
+let shapeLayer;
+let noiseImg;
+let shapeStep = 6;
 
 let gui;
 let recordController;
@@ -11,14 +14,31 @@ let mediaRecorder;
 let recordedChunks = [];
 let isRecording = false;
 
+let currentGeom = 0;
+let targetGeom = 0;
+let geomMorph = 1;
+
+let currentM = 5, currentN = 4;
+let targetM = 5, targetN = 4;
+
+let geomOptions = {
+  'Concentric Circles': 0,
+  'Dual-Lobed': 1,
+  'Diamond Lattice': 2,
+  'Hexagonal Fields': 3
+};
+
 let settings = {
-  numParticles: 5000,
+  mode: 'Geometric',
+  geomShape: 0,
+  morphSpeed: 0.015,
+  
+  numParticles: 8000, 
   m: 5,
   n: 4,
   scale: 1,
   threshold: 0.05,
-  minMN: 1,
-  maxMN: 6,
+  taper: 0.8,
   
   particleSpeed: 2,
   particleForce: 0.1,
@@ -27,7 +47,14 @@ let settings = {
   particleCol: '#E1E4D5',
   
   layerBlur: 0,
-  backgroundCol: '#404246',
+  shapeOpacity: 60,
+  shapeBlur: 15,
+  
+  bgStyle: 'Radial Gradient',
+  backgroundCol: '#E1E4D5',
+  bgGradientOuter: '#404246',
+  bgNoiseIntensity: 0.15,
+  bgBlur: 20,
   
   autoTimer: true,
   timerSeconds: 5,
@@ -44,14 +71,24 @@ function setup() {
   pixelDensity(window.devicePixelRatio || 1);
   
   particleLayer = createGraphics(width, height);
-  particleLayer.pixelDensity(pixelDensity()); // Fix blurriness on high DPI displays
+  particleLayer.pixelDensity(pixelDensity()); 
   
-  // Initialize particles
+  shapeLayer = createGraphics(width, height);
+  shapeLayer.pixelDensity(pixelDensity());
+  
+  generateNoise();
+  
   for (let i = 0; i < settings.numParticles; i++) {
     particles.push(new Particle());
   }
   
   setupGUI();
+  
+  targetM = settings.m;
+  targetN = settings.n;
+  currentM = settings.m;
+  currentN = settings.n;
+  
   randomPatterns();
   lastChangeTime = millis();
 }
@@ -59,11 +96,24 @@ function setup() {
 function setupGUI() {
   gui = new dat.GUI({ width: 320 });
   
-  let chladniFolder = gui.addFolder('Chladni Patterns');
-  chladniFolder.add(settings, 'm', 1, 10, 1).name('M Mode').listen();
-  chladniFolder.add(settings, 'n', 1, 10, 1).name('N Mode').listen();
+  let modeFolder = gui.addFolder('System Mode');
+  modeFolder.add(settings, 'mode', ['Chladni', 'Geometric']).name('Pattern Type').onChange(() => {
+    geomMorph = 0;
+    randomPatterns();
+  });
+  modeFolder.add(settings, 'geomShape', geomOptions).name('Geometric Shape').onChange(v => {
+    targetGeom = parseInt(v);
+    geomMorph = 0;
+  });
+  modeFolder.add(settings, 'morphSpeed', 0.005, 0.1, 0.005).name('Morph Speed');
+  modeFolder.open();
+  
+  let chladniFolder = gui.addFolder('Pattern Parameters');
+  chladniFolder.add(settings, 'm', 1, 10, 1).name('M Mode').onChange(v => { targetM = v; geomMorph = 0; });
+  chladniFolder.add(settings, 'n', 1, 10, 1).name('N Mode').onChange(v => { targetN = v; geomMorph = 0; });
   chladniFolder.add(settings, 'scale', 0.1, 5, 0.1).name('Scale');
   chladniFolder.add(settings, 'threshold', 0.01, 0.2, 0.01).name('Threshold');
+  chladniFolder.add(settings, 'taper', 0, 1, 0.05).name('Taper Focus');
   chladniFolder.add(settings, 'forceChange').name('Reform Patterns');
   chladniFolder.open();
 
@@ -71,7 +121,7 @@ function setupGUI() {
   let pColDict = {};
   for(let col of particlePalette) pColDict[col] = col;
   particleFolder.add(settings, 'particleCol', pColDict).name('Color').listen();
-  particleFolder.add(settings, 'numParticles', 100, 15000, 100).name('Count').onFinishChange(updateParticleCount);
+  particleFolder.add(settings, 'numParticles', 100, 30000, 100).name('Count').onFinishChange(updateParticleCount);
   particleFolder.add(settings, 'particleSpeed', 0.5, 10, 0.5).name('Max Speed');
   particleFolder.add(settings, 'particleForce', 0.01, 1, 0.01).name('Max Force');
   particleFolder.add(settings, 'particleSize', 0.5, 10, 0.5).name('Size');
@@ -80,11 +130,17 @@ function setupGUI() {
   particleFolder.open();
   
   let renderFolder = gui.addFolder('Rendering & Background');
-  renderFolder.add(settings, 'layerBlur', 0, 20, 1).name('Layer Blur');
+  renderFolder.add(settings, 'shapeOpacity', 0, 255, 5).name('Shape Opacity');
+  renderFolder.add(settings, 'shapeBlur', 0, 50, 1).name('Shape Blur');
+  renderFolder.add(settings, 'layerBlur', 0, 20, 1).name('Particle Blur');
   
+  renderFolder.add(settings, 'bgStyle', ['Solid', 'Radial Gradient']).name('BG Style');
   let bgDict = {};
   for(let col of bgPalette) bgDict[col] = col;
-  renderFolder.add(settings, 'backgroundCol', bgDict).name('Background');
+  renderFolder.add(settings, 'backgroundCol', bgDict).name('BG Inner/Solid');
+  renderFolder.add(settings, 'bgGradientOuter', bgDict).name('BG Outer');
+  renderFolder.add(settings, 'bgNoiseIntensity', 0, 1, 0.05).name('Noise Intensity');
+  renderFolder.add(settings, 'bgBlur', 0, 50, 1).name('BG Noise Blur');
   renderFolder.open();
   
   let timerFolder = gui.addFolder('Auto Timer');
@@ -94,7 +150,6 @@ function setupGUI() {
   let exportFolder = gui.addFolder('Export');
   exportFolder.add(settings, 'savePNG').name('Save PNG');
   recordController = exportFolder.add(settings, 'toggleRecord').name('Start Recording');
-  exportFolder.open();
 }
 
 function toggleRecording() {
@@ -149,9 +204,97 @@ function updateParticleCount() {
   }
 }
 
-function draw() {
-  background(color(settings.backgroundCol));
+function drawShapeLayer() {
+  shapeLayer.clear();
+  shapeLayer.noStroke();
   
+  let pCol = color(settings.particleCol);
+  
+  for (let y = 0; y < height; y += shapeStep) {
+    for (let x = 0; x < width; x += shapeStep) {
+      let nx = (x * 2 / width - 1) * settings.scale;
+      let ny = (y * 2 / height - 1) * settings.scale;
+      
+      let val;
+      if (settings.mode === 'Chladni') {
+        let v1 = chladniField(nx, ny, currentM, currentN);
+        let v2 = chladniField(nx, ny, targetM, targetN);
+        val = v1 + (v2 - v1) * geomMorph;
+      } else {
+        let v1 = evalGeom(nx, ny, currentGeom);
+        let v2 = evalGeom(nx, ny, targetGeom);
+        val = v1 + (v2 - v1) * geomMorph;
+      }
+      
+      let absVal = Math.abs(val);
+      if (absVal < settings.threshold * 3) {
+        let nodeIntensity = map(absVal, 0, settings.threshold * 3, 1, 0);
+        
+        let nxNorm = x * 2 / width - 1;
+        let nyNorm = y * 2 / height - 1;
+        let rSq = nxNorm*nxNorm + nyNorm*nyNorm;
+        
+        // Intensity falloff taper matching the physics engine
+        let falloff = Math.exp(-rSq * settings.taper * 2);
+        
+        let finalAlpha = nodeIntensity * falloff * settings.shapeOpacity;
+        if (finalAlpha > 1) {
+          pCol.setAlpha(finalAlpha);
+          shapeLayer.fill(pCol);
+          shapeLayer.rect(x, y, shapeStep, shapeStep);
+        }
+      }
+    }
+  }
+}
+
+function draw() {
+  if (geomMorph < 1) {
+    geomMorph += settings.morphSpeed;
+    if (geomMorph > 1) {
+      geomMorph = 1;
+      currentM = targetM;
+      currentN = targetN;
+      currentGeom = targetGeom;
+    }
+  }
+
+  // 1. Draw solid or radial gradient base
+  if (settings.bgStyle === 'Radial Gradient') {
+    let cx = width / 2;
+    let cy = height / 2;
+    let maxR = dist(0, 0, cx, cy);
+    let gradient = drawingContext.createRadialGradient(cx, cy, 0, cx, cy, maxR);
+    gradient.addColorStop(0, settings.backgroundCol);
+    gradient.addColorStop(1, settings.bgGradientOuter);
+    drawingContext.fillStyle = gradient;
+    drawingContext.fillRect(0, 0, width, height);
+  } else {
+    background(color(settings.backgroundCol));
+  }
+  
+  // 2. Draw underlying Gaussian blurred geometric shape layer
+  if (settings.shapeOpacity > 0) {
+    drawShapeLayer();
+    if (settings.shapeBlur > 0) {
+      drawingContext.filter = `blur(${settings.shapeBlur}px)`;
+    }
+    image(shapeLayer, 0, 0, width, height);
+    drawingContext.filter = 'none';
+  }
+  
+  // 3. Draw static noise overlay to seamlessly blend fields together
+  if (settings.bgNoiseIntensity > 0 && noiseImg) {
+    if (settings.bgBlur > 0) {
+      drawingContext.filter = `blur(${settings.bgBlur}px)`;
+    }
+    push();
+    tint(255, settings.bgNoiseIntensity * 255);
+    image(noiseImg, 0, 0, width, height);
+    pop();
+    drawingContext.filter = 'none';
+  }
+
   if (settings.autoTimer) {
     if (millis() - lastChangeTime > settings.timerSeconds * 1000) {
       randomPatterns();
@@ -162,6 +305,7 @@ function draw() {
   let pColor = color(settings.particleCol);
   pColor.setAlpha(settings.particleOpacity);
   
+  // 4. Draw physically accurate particles over the shape fields
   if (settings.layerBlur > 0) {
     particleLayer.clear();
     particleLayer.stroke(pColor);
@@ -169,50 +313,74 @@ function draw() {
     
     for (let i = 0; i < particles.length; i++) {
       particles[i].update();
-      particleLayer.point(particles[i].position.x, particles[i].position.y);
+      particleLayer.point(particles[i].px, particles[i].py);
     }
     
     drawingContext.filter = `blur(${settings.layerBlur}px)`;
     image(particleLayer, 0, 0, width, height);
     drawingContext.filter = 'none';
   } else {
-    // Draw natively to the main canvas for absolute maximum sharpness
     stroke(pColor);
     strokeWeight(settings.particleSize);
     
     for (let i = 0; i < particles.length; i++) {
       particles[i].update();
-      point(particles[i].position.x, particles[i].position.y);
+      point(particles[i].px, particles[i].py);
     }
   }
 }
 
-function chladni(x, y) {
-  let L = 1;
-  // Apply scale directly in the Chladni computation
-  return cos(settings.n * PI * x / L) * cos(settings.m * PI * y / L) - 
-         cos(settings.m * PI * x / L) * cos(settings.n * PI * y / L);
+function chladniField(nx, ny, m, n) {
+  return Math.cos(n * Math.PI * nx) * Math.cos(m * Math.PI * ny) - 
+         Math.cos(m * Math.PI * nx) * Math.cos(n * Math.PI * ny);
+}
+
+function evalGeom(nx, ny, type) {
+  let k = 10;
+  if (type === 0) {
+    let r = Math.sqrt(nx*nx + ny*ny);
+    return Math.cos(k * r);
+  } else if (type === 1) {
+    let d1 = Math.sqrt((nx-0.5)*(nx-0.5) + ny*ny);
+    let d2 = Math.sqrt((nx+0.5)*(nx+0.5) + ny*ny);
+    return Math.cos(k * d1) + Math.cos(k * d2);
+  } else if (type === 2) {
+    return Math.cos(k * (nx+ny)) * Math.cos(k * (nx-ny));
+  } else if (type === 3) {
+    return Math.cos(k * nx) + Math.cos(k * 0.5 * nx + k * 0.866 * ny) + Math.cos(k * 0.5 * nx - k * 0.866 * ny);
+  }
+  return 0;
 }
 
 function randomPatterns() {
-  // Both n and m must be random integers between 2 and 5
-  settings.m = floor(random(2, 6));
-  settings.n = floor(random(2, 6));
-  
-  // Ensure n !== m at all times
-  while (settings.m === settings.n) {
-    settings.m = floor(random(2, 6));
+  if (settings.mode === 'Chladni') {
+    targetM = floor(random(2, 6));
+    targetN = floor(random(2, 6));
+    while (targetM === targetN) {
+      targetM = floor(random(2, 6));
+    }
+    settings.m = targetM;
+    settings.n = targetN;
+    if (gui && gui.__folders['Pattern Parameters']) {
+      gui.__folders['Pattern Parameters'].__controllers.forEach(c => {
+        if (c.property === 'm' || c.property === 'n') c.updateDisplay();
+      });
+    }
+  } else {
+    let nextGeom = floor(random(0, 4));
+    while (nextGeom === currentGeom) {
+      nextGeom = floor(random(0, 4));
+    }
+    targetGeom = nextGeom;
+    settings.geomShape = targetGeom;
+    if (gui && gui.__folders['System Mode']) {
+      gui.__folders['System Mode'].__controllers.forEach(c => {
+        if (c.property === 'geomShape') c.updateDisplay();
+      });
+    }
   }
   
-  // Update the GUI to reflect the new values
-  if (gui && gui.__folders['Chladni Patterns']) {
-    gui.__folders['Chladni Patterns'].__controllers.forEach(c => {
-      if (c.property === 'm' || c.property === 'n') {
-        c.updateDisplay();
-      }
-    });
-  }
-  
+  geomMorph = 0; // Trigger the morph
   lastChangeTime = millis();
 }
 
@@ -221,4 +389,20 @@ function windowResized() {
   resizeCanvas(size, size);
   particleLayer.resizeCanvas(size, size);
   particleLayer.pixelDensity(pixelDensity());
+  shapeLayer.resizeCanvas(size, size);
+  shapeLayer.pixelDensity(pixelDensity());
+  generateNoise();
+}
+
+function generateNoise() {
+  noiseImg = createImage(width, height);
+  noiseImg.loadPixels();
+  for (let i = 0; i < noiseImg.pixels.length; i += 4) {
+    let val = random(255);
+    noiseImg.pixels[i] = val;
+    noiseImg.pixels[i + 1] = val;
+    noiseImg.pixels[i + 2] = val;
+    noiseImg.pixels[i + 3] = 255;
+  }
+  noiseImg.updatePixels();
 }
