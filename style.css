@@ -1,0 +1,15 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: #18191B; /* Dark page background */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+}
+
+canvas {
+  display: block;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.5); /* Optional subtle shadow to define the square */
+}
